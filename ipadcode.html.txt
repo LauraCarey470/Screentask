@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Video Click Tracker with Multiple Downloads (Touch Only)</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  canvas {
+    border:1px solid #444;
+    display:block;
+    margin-bottom:10px;
+  }
+  #controls {
+    margin-bottom:10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  button {
+    margin-bottom: 6px;
+    padding: 8px 16px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  input[type="file"] {
+    margin-bottom: 12px;
+  }
+  /* Responsive adjustments */
+  @media (max-width: 768px) {
+    canvas {
+      width: 100%;
+      height: auto;
+    }
+    button {
+      width: 100%;
+      max-width: 250px;
+    }
+  }
+</style>
+</head>
+<body>
+<h3>Video Click Tracker - Multiple Downloads</h3>
+<div id="controls">
+  <input type="file" id="videoFile" accept="video/*">
+  <button id="playBtn">Play</button>
+  <button id="pauseBtn">Pause</button>
+  <button id="replayBtn">Replay & Download Frames</button>
+  <button id="downloadBtn">Download CSV</button>
+</div>
+
+<video id="video" style="display:none;"></video>
+<canvas id="canvas" width="640" height="360"></canvas>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const videoFile = document.getElementById('videoFile');
+const playBtn = document.getElementById('playBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const replayBtn = document.getElementById('replayBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+
+let clicks = [];
+let displayClicks = [];
+let playing = false;
+let rafId;
+
+// Load video
+videoFile.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  video.src = URL.createObjectURL(file);
+  video.load();
+  video.addEventListener('loadedmetadata', () => {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    drawFrame();
+  });
+});
+
+// Draw video + temporary clicks
+function drawFrame() {
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  displayClicks.forEach(c => {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 6, 0, Math.PI*2);
+    ctx.fillStyle = 'red';
+    ctx.fill();
+    ctx.font = '16px Arial';
+    ctx.fillStyle = 'yellow';
+    ctx.fillText(c.number, c.x + 8, c.y - 8);
+  });
+  if (playing) rafId = requestAnimationFrame(drawFrame);
+}
+
+// Play / Pause
+playBtn.addEventListener('click', () => {
+  video.play();
+  playing = true;
+  drawFrame();
+});
+pauseBtn.addEventListener('click', () => {
+  video.pause();
+  playing = false;
+  cancelAnimationFrame(rafId);
+});
+
+// Record clicks (touch only for mobile devices like iPads)
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault(); // Prevent default touch behavior
+  recordClick(e);
+}, { passive: false });
+
+function recordClick(e) {
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.touches[0]; // Only use the first touch point (for single touch)
+  const x = Math.round((touch.clientX - rect.left) * (canvas.width / rect.width));
+  const y = Math.round((touch.clientY - rect.top) * (canvas.height / rect.height));
+  const timeMs = Math.round(video.currentTime * 1000);
+  const number = clicks.length + 1;
+
+  clicks.push({number, timeMs, x, y});
+  
+  // Display the click for 200ms
+  displayClicks.push({number, x, y});
+  setTimeout(() => {
+    displayClicks = displayClicks.filter(c => c.number !== number);
+  }, 200); // Remove the click after 200ms
+}
+
+// Download CSV
+downloadBtn.addEventListener('click', () => {
+  if (clicks.length === 0) { alert('No clicks recorded!'); return; }
+  let csv = 'number,timeMs,x,y\n';
+  clicks.forEach(c => csv += `${c.number},${c.timeMs},${c.x},${c.y}\n`);
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'clicks.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// Replay exact clicks & download each frame individually
+replayBtn.addEventListener('click', async () => {
+  if (clicks.length === 0) { alert('No clicks recorded!'); return; }
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  for (let i = 0; i < clicks.length; i++) {
+    const c = clicks[i];
+    video.currentTime = c.timeMs / 1000;
+
+    // Wait for video frame to be ready
+    await new Promise(resolve => {
+      if ('requestVideoFrameCallback' in video) {
+        video.requestVideoFrameCallback(() => resolve());
+      } else {
+        video.onseeked = () => { video.onseeked = null; resolve(); };
+      }
+    });
+    video.pause();
+
+    // Draw video + click
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 8, 0, Math.PI*2);
+    ctx.fillStyle = 'red';
+    ctx.fill();
+    ctx.font = '16px Arial';
+    ctx.fillStyle = 'yellow';
+    ctx.fillText(c.number, c.x + 10, c.y - 10);
+
+    // Trigger download for this frame
+    const dataURL = canvas.toDataURL("image/jpeg");
+    const a = document.createElement('a');
+    a.href = dataURL;
+    a.download = `click_${c.number}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    await sleep(1000); // display click for 1 second
+  }
+});
+</script>
+</body>
+</html>
